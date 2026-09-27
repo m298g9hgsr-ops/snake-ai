@@ -1,0 +1,255 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI 贪食蛇</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            background: #1a1a2e; color: #eee;
+            font-family: 'Courier New', monospace;
+            display: flex; flex-direction: column; align-items: center;
+            padding: 20px; min-height: 100vh;
+        }
+        h1 { color: #00ff88; margin-bottom: 10px; text-shadow: 0 0 10px #00ff88; }
+        #info { display: flex; gap: 30px; margin-bottom: 8px; font-size: 16px; }
+        #info span { color: #ffcc00; }
+        #status { margin-bottom: 8px; color: #00ccff; font-size: 13px; min-height: 18px; }
+        #game-container { position: relative; border: 3px solid #00ff88; box-shadow: 0 0 20px rgba(0,255,136,0.3); }
+        canvas { display: block; background: #0f0f23; }
+        #controls { margin-top: 12px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; justify-content: center; }
+        button, select {
+            background: #00ff88; color: #1a1a2e; border: none; padding: 7px 16px;
+            font-family: 'Courier New', monospace; font-weight: bold; cursor: pointer; border-radius: 5px; font-size: 13px;
+        }
+        button:hover { background: #00cc6a; }
+        select { background: #333; color: #00ff88; border: 2px solid #00ff88; }
+        label { font-size: 13px; color: #aaa; }
+    </style>
+</head>
+<body>
+    <h1>AI 贪食蛇</h1>
+    <div id="info">
+        <div>分數: <span id="score">0</span></div>
+        <div>最高分: <span id="best">0</span></div>
+        <div>模式: <span id="mode">BFS AI</span></div>
+    </div>
+    <div id="status">AI 自動控制中</div>
+    <div id="game-container">
+        <canvas id="game"></canvas>
+    </div>
+    <div id="controls">
+        <button onclick="game.restart()">重新開始</button>
+        <button onclick="game.togglePause()">暫停/繼續</button>
+        <label>AI 模式:</label>
+        <select id="ai-mode" onchange="game.setAI(this.value)">
+            <option value="bfs">BFS 最短路徑</option>
+            <option value="hamilton">漢密爾頓迴圈</option>
+        </select>
+        <label>速度:</label>
+        <select onchange="game.setSpeed(this.value)">
+            <option value="50">極快</option>
+            <option value="100" selected>正常</option>
+            <option value="200">慢</option>
+        </select>
+    </div>
+
+    <script>
+    const WIDTH = 25;
+    const HEIGHT = 20;
+    const CS = 20;
+
+    class SnakeGame {
+        constructor() {
+            this.canvas = document.getElementById('game');
+            this.canvas.width = WIDTH * CS;
+            this.canvas.height = HEIGHT * CS;
+            this.ctx = this.canvas.getContext('2d');
+            this.best = parseInt(localStorage.getItem('snakeBest') || '0');
+            document.getElementById('best').textContent = this.best;
+            this.reset();
+            this.running = false;
+            this.paused = false;
+            this.aiMode = 'bfs';
+            this.timer = null;
+            this.draw();
+        }
+
+        reset() {
+            const sx = Math.floor(WIDTH / 2);
+            const sy = Math.floor(HEIGHT / 2);
+            this.snake = [[sx, sy], [sx - 1, sy], [sx - 2, sy]];
+            this.dir = [1, 0];
+            this.pendingDir = [1, 0];
+            this.score = 0;
+            this.gameOver = false;
+            this.food = this.spawnFood();
+            document.getElementById('score').textContent = '0';
+        }
+
+        spawnFood() {
+            while (true) {
+                const x = Math.floor(Math.random() * WIDTH);
+                const y = Math.floor(Math.random() * HEIGHT);
+                if (!this.snake.some(([sx, sy]) => sx === x && sy === y)) return [x, y];
+            }
+        }
+
+        start() {
+            if (this.gameOver) this.reset();
+            if (this.running) return;
+            this.running = true; this.paused = false;
+            this.loop();
+        }
+
+        stop() { this.running = false; if (this.timer) { clearTimeout(this.timer); this.timer = null; } }
+
+        togglePause() { if (!this.running) { this.start(); return; } this.paused = !this.paused; if (!this.paused) this.loop(); }
+        restart() { this.stop(); this.reset(); this.start(); }
+        setAI(mode) {
+            this.aiMode = mode;
+            document.getElementById('mode').textContent = mode === 'bfs' ? 'BFS AI' : '漢密爾頓';
+            document.getElementById('status').textContent = mode === 'bfs' ? 'BFS 最短路徑 AI' : '漢密尔顿迴圈 AI';
+        }
+        setSpeed(ms) { if (this.running && !this.paused) { this.stop(); this.running = true; this.loop(); } }
+
+        loop() {
+            if (!this.running || this.paused || this.gameOver) return;
+            this.timer = setTimeout(() => { this.tick(); this.loop(); }, 100);
+        }
+
+        tick() {
+            const aiDir = this.aiMode === 'bfs' ? this.bfsAI() : this.hamiltonAI();
+            if (aiDir) {
+                if (!(this.dir[0] + aiDir[0] === 0 && this.dir[1] + aiDir[1] === 0)) {
+                    this.pendingDir = aiDir;
+                }
+            }
+            this.dir = this.pendingDir;
+
+            const hx = this.snake[0][0] + this.dir[0];
+            const hy = this.snake[0][1] + this.dir[1];
+
+            if (hx < 0 || hx >= WIDTH || hy < 0 || hy >= HEIGHT ||
+                this.snake.slice(0, -1).some(([sx, sy]) => sx === hx && sy === hy)) {
+                this.gameOver = true; this.stop();
+                if (this.score > this.best) {
+                    this.best = this.score;
+                    localStorage.setItem('snakeBest', this.best);
+                    document.getElementById('best').textContent = this.best;
+                }
+                this.draw();
+                return;
+            }
+
+            this.snake.unshift([hx, hy]);
+            if (hx === this.food[0] && hy === this.food[1]) {
+                this.score += 10;
+                document.getElementById('score').textContent = this.score;
+                this.food = this.spawnFood();
+            } else {
+                this.snake.pop();
+            }
+            this.draw();
+        }
+
+        bfsAI() {
+            const head = this.snake[0];
+            const food = this.food;
+            const snakeSet = new Set(this.snake.map(([x, y]) => `${x},${y}`));
+            const queue = [[head, null]];
+            const visited = new Set([`${head[0]},${head[1]}`]);
+
+            while (queue.length > 0) {
+                const [[x, y], firstDir] = queue.shift();
+                if (x === food[0] && y === food[1]) return firstDir;
+                for (const [dx, dy] of [[0, -1], [0, 1], [-1, 0], [1, 0]]) {
+                    const nx = x + dx, ny = y + dy;
+                    const key = `${nx},${ny}`;
+                    if (nx >= 0 && nx < WIDTH && ny >= 0 && ny < HEIGHT && !visited.has(key) && !snakeSet.has(key)) {
+                        visited.add(key);
+                        queue.push([[nx, ny], firstDir || [dx, dy]]);
+                    }
+                }
+            }
+            return this.findSafeDir();
+        }
+
+        findSafeDir() {
+            const head = this.snake[0];
+            const snakeSet = new Set(this.snake.map(([x, y]) => `${x},${y}`));
+            for (const [dx, dy] of [[0, -1], [0, 1], [-1, 0], [1, 0]]) {
+                if (this.dir[0] + dx === 0 && this.dir[1] + dy === 0) continue;
+                const nx = head[0] + dx, ny = head[1] + dy;
+                if (nx >= 0 && nx < WIDTH && ny >= 0 && ny < HEIGHT && !snakeSet.has(`${nx},${ny}`)) return [dx, dy];
+            }
+            return this.dir;
+        }
+
+        hamiltonAI() {
+            const head = this.snake[0];
+            const snakeSet = new Set(this.snake.map(([x, y]) => `${x},${y}`));
+            const path = [];
+            for (let y = 0; y < HEIGHT; y++) {
+                if (y % 2 === 0) { for (let x = 0; x < WIDTH; x++) path.push([x, y]); }
+                else { for (let x = WIDTH - 1; x >= 0; x--) path.push([x, y]); }
+            }
+            let headIdx = -1;
+            for (let i = 0; i < path.length; i++) {
+                if (path[i][0] === head[0] && path[i][1] === head[1]) { headIdx = i; break; }
+            }
+            if (headIdx === -1) return this.findSafeDir();
+
+            const food = this.food;
+            for (let i = 1; i <= 5; i++) {
+                const idx = (headIdx + i) % path.length;
+                if (path[idx][0] === food[0] && path[idx][1] === food[1]) {
+                    const direct = this.bfsAI();
+                    if (direct) return direct;
+                }
+            }
+            const nextIdx = (headIdx + 1) % path.length;
+            const nx = path[nextIdx][0], ny = path[nextIdx][1];
+            if (snakeSet.has(`${nx},${ny}`)) return this.findSafeDir();
+            return [nx - head[0], ny - head[1]];
+        }
+
+        draw() {
+            const ctx = this.ctx;
+            ctx.fillStyle = '#0f0f23';
+            ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+
+            const [fx, fy] = this.food;
+            ctx.fillStyle = '#ff4444'; ctx.shadowColor = '#ff4444'; ctx.shadowBlur = 10;
+            ctx.beginPath();
+            ctx.arc(fx * CS + CS / 2, fy * CS + CS / 2, CS / 3, 0, Math.PI * 2);
+            ctx.fill(); ctx.shadowBlur = 0;
+
+            this.snake.forEach(([x, y], i) => {
+                if (i === 0) { ctx.fillStyle = '#ffcc00'; ctx.shadowColor = '#ffcc00'; ctx.shadowBlur = 8; }
+                else {
+                    const alpha = 1 - (i / this.snake.length) * 0.5;
+                    ctx.fillStyle = `rgba(0, 255, 136, ${alpha})`; ctx.shadowBlur = 0;
+                }
+                ctx.fillRect(x * CS + 1, y * CS + 1, CS - 2, CS - 2);
+            });
+            ctx.shadowBlur = 0;
+
+            if (this.gameOver) {
+                ctx.fillStyle = 'rgba(0,0,0,0.7)';
+                ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+                ctx.fillStyle = '#ff4444'; ctx.font = 'bold 28px Courier New'; ctx.textAlign = 'center';
+                ctx.fillText('GAME OVER', this.canvas.width / 2, this.canvas.height / 2 - 10);
+                ctx.fillStyle = '#ffcc00'; ctx.font = '16px Courier New';
+                ctx.fillText(`分數: ${this.score}`, this.canvas.width / 2, this.canvas.height / 2 + 20);
+                ctx.fillText('按重新開始再玩', this.canvas.width / 2, this.canvas.height / 2 + 45);
+            }
+        }
+    }
+
+    const game = new SnakeGame();
+    game.start();
+    </script>
+</body>
+</html>
